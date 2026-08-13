@@ -48,6 +48,11 @@ const RULES = [
     severity: "critical",
     // boto3/botocore and the AWS JS SDK, given explicit key material.
     re: /\b(aws_access_key_id|aws_secret_access_key|accessKeyId|secretAccessKey)\s*[=:]/g,
+    // Reading these keys OUT of an assume-role response is the compliant pattern — it is how
+    // short-lived credentials get plumbed into a subprocess — and it looks identical to passing
+    // static ones in. Found against terraform-guard's own STS credential-minting module, which
+    // this rule flagged four times while being the most compliant file in that repo.
+    excludeNearby: /\b(AssumeRole|assumeRole|STSClient|Credentials|sts:|SessionToken|sessionToken)\b/,
     message: "an AWS SDK is being given static key material",
     remediation:
       "remove the explicit keys and let the SDK resolve an assumed role — IRSA or EKS Pod " +
@@ -93,10 +98,9 @@ export function scanCode(source, file, allowances = []) {
     while ((m = rule.re.exec(clean))) {
       // Some rules only make sense next to a connection call — `password=` inside an unrelated
       // dict is noise, and noise is what gets a scanner disabled.
-      if (rule.requiresNearby) {
-        const window = clean.slice(Math.max(0, m.index - 240), m.index + 120);
-        if (!rule.requiresNearby.test(window)) continue;
-      }
+      const window = clean.slice(Math.max(0, m.index - 240), m.index + 120);
+      if (rule.requiresNearby && !rule.requiresNearby.test(window)) continue;
+      if (rule.excludeNearby && rule.excludeNearby.test(window)) continue;
       const line = lineOf(clean, m.index);
       const key = `${rule.id}:${line}`;
       if (seen.has(key)) continue;

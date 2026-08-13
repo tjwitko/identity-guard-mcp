@@ -259,3 +259,21 @@ test("clean and violating fixtures behave as documented", () => {
   assert.equal(bad.clean, false);
   assert.ok(bad.counts.blocking >= 6, `expected several blocking findings, got ${bad.counts.blocking}`);
 });
+
+// Reading these keys out of an assume-role response is how short-lived credentials reach a
+// subprocess — the compliant pattern, and textually identical to passing static ones in. Found
+// against terraform-guard's own STS module, which this rule flagged four times while being the
+// most compliant file in that repo.
+test("does not flag credentials plumbed out of an STS assume-role response", () => {
+  assert.deepEqual(scanCode(`
+const { Credentials } = await sts.send(new AssumeRoleCommand(input));
+return { accessKeyId: Credentials.AccessKeyId, secretAccessKey: Credentials.SecretAccessKey };
+`, "creds.mjs"), []);
+});
+
+test("still flags static keys handed to an SDK", () => {
+  assert.deepEqual(
+    ids(scanCode(`const s3 = new S3({ accessKeyId: "AKIA...", secretAccessKey: "..." });`, "a.js")), // identity-guard:allow test material
+    ["auth.static-cloud-key"]
+  );
+});

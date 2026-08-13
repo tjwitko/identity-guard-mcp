@@ -1,0 +1,2 @@
+Fixtures for this scanner's own tests: fixtures/violating is deliberately non-compliant and is what proves the rules fire.
+Scanning them from the repo root would make this repo unable to pass the gate it ships.

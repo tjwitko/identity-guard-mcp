@@ -1,0 +1,3 @@
+FROM python:3.12-slim
+ENV DB_PASSWORD=hunter2
+ARG NPM_TOKEN

@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: audit-log-sa
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/audit-log
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: audit-log }
+spec:
+  template:
+    spec:
+      serviceAccountName: audit-log-sa
+      containers:
+        - name: app
+          image: audit-log:1.0

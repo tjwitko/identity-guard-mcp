@@ -1,0 +1,155 @@
+import { IDENTITY_ANNOTATIONS, SPIFFE_CSI_DRIVERS, SPIFFE_SOCKET_HINTS } from "./taxonomy.mjs";
+
+// The positive half of the policy: does this workload have an identity to authenticate WITH?
+//
+// Parsed with a real YAML parser rather than regex. Manifests are multi-document, deeply nested
+// and whitespace-significant; a security verdict derived from line matching would be wrong often
+// enough to be worse than nothing. This is the same reasoning that keeps terraform-guard on
+// `terraform show -json` instead of reading HCL.
+
+const WORKLOAD_KINDS = new Set([
+  "Pod", "Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "ReplicaSet", "ReplicationController",
+]);
+
+// Where the pod spec lives differs by kind, and CronJob buries it two templates deep.
+function podSpecOf(doc) {
+  if (!doc || typeof doc !== "object") return null;
+  if (doc.kind === "Pod") return doc.spec || null;
+  if (doc.kind === "CronJob") return doc.spec?.jobTemplate?.spec?.template?.spec || null;
+  return doc.spec?.template?.spec || null;
+}
+
+const CREDENTIAL_KEY = /(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|credential)/i;
+
+function hasSpiffeVolume(podSpec) {
+  for (const v of podSpec.volumes || []) {
+    if (v?.csi?.driver && SPIFFE_CSI_DRIVERS.includes(v.csi.driver)) return true;
+    const hostPath = v?.hostPath?.path || "";
+    if (SPIFFE_SOCKET_HINTS.some((h) => hostPath.includes(h))) return true;
+  }
+  const serialized = JSON.stringify(podSpec);
+  return SPIFFE_SOCKET_HINTS.some((h) => serialized.includes(h));
+}
+
+function containersOf(podSpec) {
+  return [...(podSpec.containers || []), ...(podSpec.initContainers || [])];
+}
+
+export function scanKubernetes(docs, serviceAccounts, file) {
+  const findings = [];
+  const add = (f) => findings.push({ file, heuristic: false, ...f });
+
+  for (const doc of docs) {
+    if (!doc || typeof doc !== "object") continue;
+
+    // A Secret whose keys are credential material is the thing the policy exists to remove.
+    if (doc.kind === "Secret") {
+      const keys = [...Object.keys(doc.data || {}), ...Object.keys(doc.stringData || {})];
+      const credKeys = keys.filter((k) => CREDENTIAL_KEY.test(k));
+      if (credKeys.length) {
+        add({
+          ruleId: "identity.secret-as-auth",
+          category: "identity.secret-as-auth",
+          severity: "high",
+          name: doc.metadata?.name || "(unnamed)",
+          message: `Secret "${doc.metadata?.name || "?"}" carries authentication material (${credKeys.join(", ")})`,
+          remediation:
+            "a Secret is a distribution mechanism for a shared credential, which is what workload " +
+            "identity replaces. Bind the ServiceAccount to a cloud identity (IRSA / GKE / Azure " +
+            "Workload Identity) or issue an SVID, and authenticate with that instead.",
+        });
+      }
+    }
+
+    if (!WORKLOAD_KINDS.has(doc.kind)) continue;
+    const podSpec = podSpecOf(doc);
+    if (!podSpec) continue;
+
+    const workload = `${doc.kind}/${doc.metadata?.name || "(unnamed)"}`;
+    const sa = podSpec.serviceAccountName || podSpec.serviceAccount;
+
+    if (!sa || sa === "default") {
+      add({
+        ruleId: "identity.default-sa",
+        category: "identity.default-sa",
+        severity: "critical",
+        name: workload,
+        message: `${workload} runs as the default ServiceAccount, so it has no identity of its own`,
+        remediation:
+          "give it a dedicated ServiceAccount and bind that to an identity — an IRSA/GKE/Azure " +
+          "annotation, an EKS Pod Identity association, or a SPIFFE SVID via the CSI driver.",
+      });
+    } else {
+      const spiffe = hasSpiffeVolume(podSpec);
+      const annotations = serviceAccounts.get(sa) || null;
+      const bound = annotations && IDENTITY_ANNOTATIONS.some((a) => a in annotations);
+
+      if (!spiffe && !bound) {
+        add({
+          ruleId: "identity.unbound",
+          category: "identity.unbound",
+          severity: "medium",
+          // EKS Pod Identity associates a role to a ServiceAccount through the AWS API, leaving
+          // no trace in the manifest. So "no evidence here" genuinely is not proof, and this must
+          // not block or it fails correct Pod Identity setups.
+          heuristic: true,
+          name: workload,
+          message:
+            `${workload} uses ServiceAccount "${sa}", but nothing in these manifests binds it to ` +
+            `an identity (no IRSA/GKE/Azure annotation, no SPIFFE volume)`,
+          remediation:
+            "annotate the ServiceAccount, mount an SVID via the SPIFFE CSI driver, or — if this " +
+            "is EKS Pod Identity, which binds outside the manifest — record that so the check " +
+            "can be satisfied deliberately rather than by silence.",
+        });
+      }
+    }
+
+    // Credential-shaped Secret references reaching the container as environment.
+    for (const c of containersOf(podSpec)) {
+      for (const ef of c.envFrom || []) {
+        if (ef?.secretRef?.name) {
+          add({
+            ruleId: "identity.secret-as-auth",
+            category: "identity.secret-as-auth",
+            severity: "high",
+            name: `${workload}/${c.name || "?"}`,
+            message: `container "${c.name || "?"}" loads every key of Secret "${ef.secretRef.name}" as environment`,
+            remediation:
+              "envFrom pulls whatever the Secret holds, so its contents are invisible here and " +
+              "grow silently. Authenticate with the workload's identity instead of injecting " +
+              "shared material.",
+          });
+        }
+      }
+      for (const e of c.env || []) {
+        const key = e?.valueFrom?.secretKeyRef?.key;
+        if (key && CREDENTIAL_KEY.test(key)) {
+          add({
+            ruleId: "identity.secret-as-auth",
+            category: "identity.secret-as-auth",
+            severity: "high",
+            name: `${workload}/${c.name || "?"}`,
+            message: `container "${c.name || "?"}" takes ${e.name} from Secret key "${key}"`,
+            remediation:
+              "this is a shared credential handed to the workload. Replace it with an identity " +
+              "the workload proves — IAM database auth, or mTLS with an SVID.",
+          });
+        }
+      }
+    }
+  }
+
+  return findings;
+}
+
+// Built across every manifest in the scan before workloads are evaluated, because a Deployment
+// and the ServiceAccount it names are routinely in different files.
+export function indexServiceAccounts(docs, into = new Map()) {
+  for (const doc of docs) {
+    if (doc?.kind === "ServiceAccount" && doc.metadata?.name) {
+      into.set(doc.metadata.name, doc.metadata.annotations || {});
+    }
+  }
+  return into;
+}

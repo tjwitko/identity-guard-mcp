@@ -277,3 +277,28 @@ test("still flags static keys handed to an SDK", () => {
     ["auth.static-cloud-key"]
   );
 });
+
+// The rule that six real projects were needed to find. secret-guard allowlists `user:password@`
+// as a placeholder — correctly, since nothing leaked — so a DSN written into application code
+// fell through both scanners. The questions differ: "is this a leaked secret" versus "is this
+// password authentication". A placeholder answers no to the first and yes to the second.
+test("flags a password in a connection string, placeholder or not", () => {
+  for (const dsn of [
+    'postgresql://user:password@db_host:5432/auditdb', // identity-guard:allow test material
+    'postgresql://admin:REALpw123@db.internal/app', // identity-guard:allow test material
+    'redis://:${REDIS_PASSWORD}@cache:6379', // identity-guard:allow test material
+    'https://svc:token@api.internal/v1', // identity-guard:allow test material
+  ]) {
+    assert.deepEqual(
+      ids(scanCode(`DATABASE_URL = "${dsn}"`, "a.py")),
+      ["auth.connection-string-password"],
+      dsn
+    );
+  }
+});
+
+test("does not flag connection strings with no password component", () => {
+  for (const dsn of ["sqlite:///./audit.db", "postgresql://user@host/db", "https://api.internal/v1"]) {
+    assert.deepEqual(scanCode(`URL = "${dsn}"`, "a.py"), [], dsn);
+  }
+});

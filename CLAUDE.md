@@ -17,7 +17,7 @@ No external binary; `yaml` is the only non-MCP dependency.
 - `rules/kubernetes.mjs` — the positive half; the interesting logic
 - `rules/code.mjs` — the anti-pattern half
 - `rules/taxonomy.mjs` — categories, and the verified annotation/CSI-driver lists
-- `test/rules.test.mjs` — 19 tests
+- `test/rules.test.mjs` — 23 tests
 
 ## Things to know
 
@@ -35,6 +35,13 @@ No external binary; `yaml` is the only non-MCP dependency.
 - **Manifests are parsed with a real YAML parser, not regex.** Multi-document, deeply nested,
   whitespace-significant — a verdict derived from line matching would be wrong often enough to be
   worse than nothing. Same reasoning that keeps terraform-guard on `terraform show -json`.
+- **A password in a connection string is flagged even when it is obviously a placeholder**, and
+  that is the sharpest illustration of how this server differs from secret-guard. secret-guard
+  asks "is this a leaked secret?" and correctly allowlists `user:password@` — nothing leaked.
+  This asks "is this password authentication?" and the answer is yes regardless of whether the
+  value is real, interpolated or a stand-in. Found by running the scanner over six real generated
+  projects: one had `postgresql://user:password@db_host:5432/auditdb` as a default in application
+  code and it fell through BOTH scanners.
 - **`password=` is flagged even when the value comes from an environment variable or a secret
   manager.** That is the policy, not an oversight: sourcing a password well changes where it is
   stored, not what it is. Expect to explain this; it is the rule people push back on.

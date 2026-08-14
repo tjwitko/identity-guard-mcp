@@ -23,6 +23,7 @@ as the default ServiceAccount. Pattern matching cannot answer that.
 |---|---|
 | `auth.static-cloud-key` | an AWS SDK given `aws_access_key_id` / `accessKeyId` |
 | `auth.password-connect` | a database driver taking a `password` argument |
+| `auth.connection-string-password` | `scheme://user:pass@host` in code — placeholder or not |
 | `auth.basic` | `HTTPBasicAuth`, `auth=(u,p)`, `Authorization: Basic` |
 | `auth.dockerfile-credential` | `ENV`/`ARG` named `*PASSWORD*`, `*TOKEN*`, `*SECRET*` |
 | `identity.default-sa` | a workload running as the `default` ServiceAccount |

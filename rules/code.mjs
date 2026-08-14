@@ -73,6 +73,28 @@ const RULES = [
       "password when it comes from an env var or a secret manager.",
   },
   {
+    id: "auth.connection-string-password",
+    category: "auth.password",
+    severity: "critical",
+    // scheme://user:password@host — password authentication written into a connection string.
+    //
+    // Note this fires on placeholders too, and that is the point. secret-guard asks "is this a
+    // leaked secret?" and correctly allowlists `user:password@`, because nothing was leaked. This
+    // asks a different question — "is this password authentication?" — and the answer there is
+    // yes regardless of whether the value is real, interpolated or a stand-in. The mechanism is
+    // the finding, not the secrecy of the value.
+    //
+    // Found by running this scanner over six real generated projects: one had
+    // `postgresql://user:password@db_host:5432/auditdb` as a default in application code, and it
+    // fell through BOTH scanners.
+    re: /\b[a-z][a-z0-9+.-]*:\/\/[^/\s:@"']*:[^/\s@"']{1,128}@/g,
+    message: "a connection string authenticates with a password",
+    remediation:
+      "build the connection from an identity instead: an IAM auth token (RDS IAM, Cloud SQL IAM, " +
+      "Azure AD) fetched at connect time, or mTLS with an SVID. A DSN with a password in it is " +
+      "password authentication whether the value is real, interpolated or a placeholder.",
+  },
+  {
     id: "auth.basic",
     category: "auth.basic",
     severity: "high",

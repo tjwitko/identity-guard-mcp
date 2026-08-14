@@ -1,0 +1,7 @@
+# Test material for the connection-string rule. These lines must contain realistic-looking
+# passwords: the test exists to prove the rule fires on real ones as well as placeholders, so
+# substituting a placeholder here would delete the property under test.
+#
+# Fingerprints, not a path exclude — a genuinely new secret in this file still fails.
+/Users/tomwitkowski/LLM/identity-guard-mcp/test/rules.test.mjs:connection-string-password:288
+/Users/tomwitkowski/LLM/identity-guard-mcp/test/rules.test.mjs:connection-string-password:290

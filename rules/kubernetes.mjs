@@ -19,7 +19,20 @@ function podSpecOf(doc) {
   return doc.spec?.template?.spec || null;
 }
 
+// A connection string is credential material even though its name says "url". Found in a real
+// generated project: DATABASE_URL pulled from a Secret via secretKeyRef with key "url", carrying
+// postgresql://user:PASSWORD@host/db. The key-name check below did not match, so a password
+// arrived in the pod through a path this rule inspects but did not recognise — the same defect
+// the connection-string rule in rules/code.mjs exists for, reaching the workload by a different
+// route. `endpoint`/`host` are deliberately absent: those routinely name a bare address with no
+// credential in it, and flagging them would be the noise that gets a scanner switched off.
+const CONNECTION_STRING_KEY = /(^|[_-])(url|uri|dsn|conn(ection)?([_-]?string)?)$/i;
+
 const CREDENTIAL_KEY = /(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|credential)/i;
+
+function isCredentialKey(key) {
+  return typeof key === "string" && (CREDENTIAL_KEY.test(key) || CONNECTION_STRING_KEY.test(key));
+}
 
 function hasSpiffeVolume(podSpec) {
   for (const v of podSpec.volumes || []) {
@@ -45,7 +58,7 @@ export function scanKubernetes(docs, serviceAccounts, file) {
     // A Secret whose keys are credential material is the thing the policy exists to remove.
     if (doc.kind === "Secret") {
       const keys = [...Object.keys(doc.data || {}), ...Object.keys(doc.stringData || {})];
-      const credKeys = keys.filter((k) => CREDENTIAL_KEY.test(k));
+      const credKeys = keys.filter((k) => isCredentialKey(k));
       if (credKeys.length) {
         add({
           ruleId: "identity.secret-as-auth",
@@ -124,7 +137,7 @@ export function scanKubernetes(docs, serviceAccounts, file) {
       }
       for (const e of c.env || []) {
         const key = e?.valueFrom?.secretKeyRef?.key;
-        if (key && CREDENTIAL_KEY.test(key)) {
+        if (isCredentialKey(key)) {
           add({
             ruleId: "identity.secret-as-auth",
             category: "identity.secret-as-auth",

@@ -302,3 +302,67 @@ test("does not flag connection strings with no password component", () => {
     assert.deepEqual(scanCode(`URL = "${dsn}"`, "a.py"), [], dsn);
   }
 });
+
+// A connection string is credential material even though its key is named "url". Found in a real
+// generated project: DATABASE_URL taken from a Secret via secretKeyRef with key "url", carrying a
+// postgresql:// DSN with the password inside it. The key-name check did not match, so a password
+// reached the pod through a path this rule inspects but did not recognise.
+test("flags a connection-string Secret key, not just a credential-named one", () => {
+  for (const key of ["url", "uri", "dsn", "connection_string", "DATABASE_URL"]) {
+    const f = k8s(`
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: app }
+spec:
+  template:
+    spec:
+      serviceAccountName: app-sa
+      containers:
+        - name: app
+          image: x
+          env:
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: db, key: ${key} } }
+      volumes:
+        - name: svid
+          csi: { driver: csi.spiffe.io }
+`).filter((x) => x.ruleId === "identity.secret-as-auth");
+    assert.equal(f.length, 1, `key "${key}" should be treated as credential material`);
+  }
+});
+
+// `host` and `port` name an address, not a credential, and flagging them would be the noise that
+// gets a scanner switched off.
+test("does not flag Secret keys that name an address rather than a credential", () => {
+  for (const key of ["host", "port", "ca_cert", "region"]) {
+    const f = k8s(`
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: app }
+spec:
+  template:
+    spec:
+      serviceAccountName: app-sa
+      containers:
+        - name: app
+          image: x
+          env:
+            - name: CFG
+              valueFrom: { secretKeyRef: { name: db, key: ${key} } }
+      volumes:
+        - name: svid
+          csi: { driver: csi.spiffe.io }
+`).filter((x) => x.ruleId === "identity.secret-as-auth");
+    assert.equal(f.length, 0, `key "${key}" should not be treated as credential material`);
+  }
+});
+
+test("a Secret whose own key is a connection string is authentication material", () => {
+  const f = k8s(`
+apiVersion: v1
+kind: Secret
+metadata: { name: db }
+stringData: { url: "postgresql://user:pw@host/db" } # identity-guard:allow test material
+`);
+  assert.equal(f.filter((x) => x.ruleId === "identity.secret-as-auth").length, 1);
+});

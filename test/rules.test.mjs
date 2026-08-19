@@ -234,6 +234,68 @@ test("an exception file exempts a directory and is reported, never silent", () =
   }
 });
 
+// The three tests below all come from one agent run. Blocked from committing, the model wrote an
+// exception file; told in review to delete it, it emptied the file instead, because it had no
+// delete tool. Both moves exempted the entire project, and the validator reported PASS on a tree
+// that still failed the check.
+test("an exception file with no stated reason does not exempt anything", () => {
+  for (const contents of ["", "\n\n", "# Identity exceptions\n# identity.default-sa\n"]) {
+    const dir = withDir({
+      "vendor-api/client.py": `requests.get(u, auth=("svc", "key"))`, // identity-guard:allow test material
+      [`vendor-api/${EXCEPTION_FILE}`]: contents,
+    });
+    try {
+      const r = scanProject(dir);
+      assert.deepEqual(r.exemptions, [], `exempted on ${JSON.stringify(contents)}`);
+      assert.ok(r.findings.length > 0, `findings suppressed on ${JSON.stringify(contents)}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("a comment line above a real reason still exempts", () => {
+  const dir = withDir({
+    "vendor-api/client.py": `requests.get(u, auth=("svc", "key"))`, // identity-guard:allow test material
+    [`vendor-api/${EXCEPTION_FILE}`]: "# reviewed 2026-08-19\nVendor issues static keys only, ticket SEC-441.\n",
+  });
+  try {
+    const r = scanProject(dir);
+    assert.equal(r.exemptions.length, 1);
+    assert.match(r.exemptions[0].reason, /ticket SEC-441/);
+    assert.deepEqual(r.findings, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// An exception is scoped to one directory for a stated reason. At the root that scope is the whole
+// project, which is not a narrower claim than "turn the check off" -- it is the same claim.
+test("an exception at the scan root is refused, reported, and exempts nothing", () => {
+  const dir = withDir({
+    "app/main.py": `requests.get(u, auth=("svc", "key"))`, // identity-guard:allow test material
+    [EXCEPTION_FILE]: "Whole project is a bootstrap path.\n",
+  });
+  try {
+    const r = scanProject(dir);
+    assert.deepEqual(r.exemptions, []);
+    assert.equal(r.refusedExemptions.length, 1);
+    assert.match(r.refusedExemptions[0].reason, /bootstrap path/);
+    assert.ok(r.findings.length > 0);
+    assert.equal(r.clean, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// local-delegate-mcp's agent loop hardcodes this basename in GUARD_CONFIG_FILES to stop a model
+// writing its own exemption, and local-copilot-stack's validate.mjs hardcodes it again in the
+// suppression list. Neither can import it without taking a load-order risk on an optional sibling
+// repo, so this test is the thing that catches a rename. Change all three together.
+test("the exception filename is pinned — two sibling repos hardcode it", () => {
+  assert.equal(EXCEPTION_FILE, ".identity-exception");
+});
+
 test("refuses to scan outside the scan root", () => {
   assert.throws(() => resolveScanPath("../../../.aws", "/srv/project"), /refuses to scan outside/);
   assert.throws(() => resolveScanPath("/srv/project-other/x", "/srv/project"), /refuses to scan outside/);
@@ -282,12 +344,20 @@ test("still flags static keys handed to an SDK", () => {
 // as a placeholder — correctly, since nothing leaked — so a DSN written into application code
 // fell through both scanners. The questions differ: "is this a leaked secret" versus "is this
 // password authentication". A placeholder answers no to the first and yes to the second.
+//
+// Two of these carry an inline `gitleaks:allow` rather than a .gitleaksignore fingerprint. They
+// must look like real passwords -- the test exists to prove the rule fires on real ones and not
+// only on placeholders -- but fingerprints pin a line number, so inserting a test anywhere above
+// silently unpins them and the next commit fails on unchanged material. That happened. Inline
+// also puts the exemption where a reviewer reads the material it covers. All four carry it, not
+// just the two gitleaks happens to flag today -- uniform treatment of identical test material
+// beats an exemption list shaped by which patterns one scanner version matched.
 test("flags a password in a connection string, placeholder or not", () => {
   for (const dsn of [
-    'postgresql://user:password@db_host:5432/auditdb', // identity-guard:allow test material
-    'postgresql://admin:REALpw123@db.internal/app', // identity-guard:allow test material
-    'redis://:${REDIS_PASSWORD}@cache:6379', // identity-guard:allow test material
-    'https://svc:token@api.internal/v1', // identity-guard:allow test material
+    'postgresql://user:password@db_host:5432/auditdb', // identity-guard:allow test material; gitleaks:allow
+    'postgresql://admin:REALpw123@db.internal/app', // identity-guard:allow test material; gitleaks:allow
+    'redis://:${REDIS_PASSWORD}@cache:6379', // identity-guard:allow test material; gitleaks:allow
+    'https://svc:token@api.internal/v1', // identity-guard:allow test material; gitleaks:allow
   ]) {
     assert.deepEqual(
       ids(scanCode(`DATABASE_URL = "${dsn}"`, "a.py")),

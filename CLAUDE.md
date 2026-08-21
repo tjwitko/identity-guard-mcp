@@ -57,6 +57,26 @@ No external binary; `yaml` is the only non-MCP dependency.
 - **`.identity-exception` shipped with the rules, not after.** A control with no legitimate escape
   hatch gets bypassed wholesale — the `.gitleaksignore` lesson. Exemptions are reported on every
   run so an opt-out is never silent.
+- **Reported is not the same as blocking, and an agent run proved the gap.** Blocked from
+  committing, a model wrote an `.identity-exception`; told in review to delete it, it emptied the
+  file, because it had no delete tool. Both moves exempted the whole project and `scanProject`
+  returned `clean: true` — the exemption was visible in the report and invisible in the field
+  anything downstream reads. Two consequences now baked in, and neither should be relaxed:
+  `exceptionFor()` returns the first non-empty, **non-comment** line or `null`, so a blank or
+  comment-only file exempts nothing; and an exception at the **scan root** is refused outright and
+  recorded in `refusedExemptions`, because at the root the scope of "this one directory, for this
+  reason" is the entire project. A repo that genuinely is one bootstrap path must place the file
+  per-directory. That is the intended cost.
+- **The exception filename is hardcoded in two sibling repos**, so a rename here silently reopens
+  the hole. `local-delegate-mcp`'s `GUARD_CONFIG_FILES` stops a model writing its own exemption,
+  and `local-copilot-stack`'s `validate.mjs` names it in the staged-suppression list. Neither can
+  import `EXCEPTION_FILE` without taking a load-order risk on an optional sibling, so
+  `test/rules.test.mjs` pins the literal value instead. Change all three together.
+- **Test DSNs carry inline `gitleaks:allow`, and `.gitleaksignore` is deliberately gone.**
+  Fingerprints pin a line number, so adding a test above them unpinned unchanged material and
+  failed an unrelated commit twice. The exemption belongs next to the material it covers. All four
+  DSNs carry it, not just the two gitleaks flags today — an exemption list shaped by which
+  patterns one scanner version matched is worse than uniform treatment of identical material.
 - **The Terraform half lives in terraform-guard**, where the plan engine already is:
   `aws.iam.access-key-created` and `aws.iam.user-as-service-identity`. Those two are a different
   shape from every other rule there — they refuse a resource *type* rather than checking

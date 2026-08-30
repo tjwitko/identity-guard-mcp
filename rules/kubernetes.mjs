@@ -44,8 +44,23 @@ function hasSpiffeVolume(podSpec) {
   return SPIFFE_SOCKET_HINTS.some((h) => serialized.includes(h));
 }
 
+// A Helm template's `name: {{ include "app.fullname" . }}` parses into an object, not a string, and
+// interpolating it produced findings reading `Deployment/[object Object]` that named no workload
+// anyone could look up. Say what it is instead: the finding is still real, the name is just not
+// knowable before the chart is rendered.
+function readableName(value) {
+  if (typeof value === "string" && value.trim() !== "") return value;
+  if (value == null) return "(unnamed)";
+  return "(templated name)";
+}
+
 function containersOf(podSpec) {
-  return [...(podSpec.containers || []), ...(podSpec.initContainers || [])];
+  // Neither list is guaranteed to be a list. A Helm chart parses as YAML but is not Kubernetes:
+  // `containers: {{ toYaml .Values.containers }}` yields a scalar, and spreading it threw a
+  // TypeError that aborted the whole scan — taking the repository's pre-commit validation down with
+  // it, since this is what `workload identity` calls. Nothing here may assume a shape.
+  const list = (v) => (Array.isArray(v) ? v.filter((c) => c && typeof c === "object") : []);
+  return [...list(podSpec.containers), ...list(podSpec.initContainers)];
 }
 
 export function scanKubernetes(docs, serviceAccounts, file) {
@@ -64,8 +79,8 @@ export function scanKubernetes(docs, serviceAccounts, file) {
           ruleId: "identity.secret-as-auth",
           category: "identity.secret-as-auth",
           severity: "high",
-          name: doc.metadata?.name || "(unnamed)",
-          message: `Secret "${doc.metadata?.name || "?"}" carries authentication material (${credKeys.join(", ")})`,
+          name: readableName(doc.metadata?.name),
+          message: `Secret "${readableName(doc.metadata?.name)}" carries authentication material (${credKeys.join(", ")})`,
           remediation:
             "a Secret is a distribution mechanism for a shared credential, which is what workload " +
             "identity replaces. Bind the ServiceAccount to a cloud identity (IRSA / GKE / Azure " +
@@ -78,7 +93,7 @@ export function scanKubernetes(docs, serviceAccounts, file) {
     const podSpec = podSpecOf(doc);
     if (!podSpec) continue;
 
-    const workload = `${doc.kind}/${doc.metadata?.name || "(unnamed)"}`;
+    const workload = `${doc.kind}/${readableName(doc.metadata?.name)}`;
     const sa = podSpec.serviceAccountName || podSpec.serviceAccount;
 
     if (!sa || sa === "default") {
@@ -108,7 +123,7 @@ export function scanKubernetes(docs, serviceAccounts, file) {
           heuristic: true,
           name: workload,
           message:
-            `${workload} uses ServiceAccount "${sa}", but nothing in these manifests binds it to ` +
+            `${workload} uses ServiceAccount "${readableName(sa)}", but nothing in these manifests binds it to ` +
             `an identity (no IRSA/GKE/Azure annotation, no SPIFFE volume)`,
           remediation:
             "annotate the ServiceAccount, mount an SVID via the SPIFFE CSI driver, or — if this " +
@@ -135,7 +150,7 @@ export function scanKubernetes(docs, serviceAccounts, file) {
           });
         }
       }
-      for (const e of c.env || []) {
+      for (const e of Array.isArray(c.env) ? c.env : []) {
         const key = e?.valueFrom?.secretKeyRef?.key;
         if (isCredentialKey(key)) {
           add({

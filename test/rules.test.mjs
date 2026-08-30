@@ -436,3 +436,51 @@ stringData: { url: "postgresql://user:pw@host/db" } # identity-guard:allow test 
 `);
   assert.equal(f.filter((x) => x.ruleId === "identity.secret-as-auth").length, 1);
 });
+
+// --- Helm charts ---------------------------------------------------------------------------------
+// A Helm chart parses as YAML but is not Kubernetes. `containers: {{ toYaml .Values.containers }}`
+// yields a scalar, and spreading it threw a TypeError that aborted the entire scan — which took the
+// repository's own pre-commit validation down with it, since `workload identity` calls this.
+
+const helmDocs = (src) => parseAllDocuments(src).map((d) => d.toJS({ maxAliasCount: 100 }));
+
+test("a templated containers list does not crash the scan", () => {
+  const docs = helmDocs(
+    "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: app\n" +
+      "spec:\n  template:\n    spec:\n      containers: {{ toYaml .Values.containers }}\n"
+  );
+  assert.doesNotThrow(() => scanKubernetes(docs, indexServiceAccounts(docs), "helm/templates/deployment.yaml"));
+});
+
+test("a templated env list does not crash the scan", () => {
+  const docs = helmDocs(
+    "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: app\n" +
+      "spec:\n  template:\n    spec:\n      containers:\n        - name: app\n" +
+      "          env: {{ toYaml .Values.env }}\n"
+  );
+  assert.doesNotThrow(() => scanKubernetes(docs, indexServiceAccounts(docs), "helm/templates/deployment.yaml"));
+});
+
+// `name: {{ include "app.fullname" . }}` parses into an object. Interpolating it produced findings
+// reading `Deployment/[object Object]`, naming a workload nobody could look up.
+test("a templated name is reported as templated, not as [object Object]", () => {
+  const docs = helmDocs(
+    'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: {{ include "app.fullname" . }}\n' +
+      "spec:\n  template:\n    spec:\n      serviceAccountName: {{ include \"app.sa\" . }}\n" +
+      "      containers:\n        - name: app\n"
+  );
+  const findings = scanKubernetes(docs, indexServiceAccounts(docs), "helm/templates/deployment.yaml");
+  const text = JSON.stringify(findings);
+  assert.doesNotMatch(text, /\[object Object\]/);
+  if (findings.length) assert.match(text, /templated name/);
+});
+
+// The raw value still drives the logic: an absent ServiceAccount must still read as the default.
+test("a workload with no ServiceAccount is still flagged as running as default", () => {
+  const docs = helmDocs(
+    "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: app\n" +
+      "spec:\n  template:\n    spec:\n      containers:\n        - name: app\n"
+  );
+  const findings = scanKubernetes(docs, indexServiceAccounts(docs), "k8s/deployment.yaml");
+  assert.ok(findings.some((f) => /default/i.test(JSON.stringify(f))));
+});

@@ -63,9 +63,50 @@ function containersOf(podSpec) {
   return [...list(podSpec.containers), ...list(podSpec.initContainers)];
 }
 
-export function scanKubernetes(docs, serviceAccounts, file) {
+// An opt-out, scoped to a rule and a file. Line-scoped would be wrong here: these findings are
+// about a resource assembled from many lines, and the parsed documents carry no line numbers at
+// all. The rule id must be named, so an allowance is a statement about one thing rather than a
+// blanket over the manifest.
+//
+//   # identity-guard:allow identity.secret-as-auth  inbound HMAC from the payment provider
+//
+// A reason is required, for the reason the directory-level exception already requires one: a run
+// once wrote an exception file of nothing but comments, then emptied it to satisfy a review, and
+// the validator reported PASS both times. A marker with no reason is REFUSED and reported as
+// refused -- silence is what this design exists to prevent.
+// [ \t]*, not \s*: \s crosses newlines, so a marker with no reason swallowed the line break and
+// captured the NEXT line as its justification -- "# identity-guard:allow identity.secret-as-auth"
+// followed by "env:" was honoured as an allowance whose stated reason was "env:". An opt-out that
+// invents its own reason from the following line is worse than one that fails open, because it
+// reads as deliberate in the report. Same shape as a proximity window crossing a clause boundary.
+const K8S_ALLOW = /#[ \t]*identity-guard:allow[ \t]+([\w.-]+)[ \t]*(.*)$/gm;
+
+export function kubernetesAllowances(source = "") {
+  const allowed = new Map();
+  const refused = [];
+  K8S_ALLOW.lastIndex = 0;
+  let m;
+  while ((m = K8S_ALLOW.exec(source))) {
+    const reason = (m[2] || "").trim();
+    if (!reason) refused.push({ ruleId: m[1], reason: "no reason given" });
+    else allowed.set(m[1], reason);
+  }
+  return { allowed, refused };
+}
+
+export function scanKubernetes(docs, serviceAccounts, file, source = "", collected = null) {
   const findings = [];
-  const add = (f) => findings.push({ file, heuristic: false, ...f });
+  const { allowed, refused } = kubernetesAllowances(source);
+  for (const r of refused) {
+    collected?.refused.push({ ...r, file });
+  }
+  const add = (f) => {
+    if (allowed.has(f.ruleId)) {
+      collected?.allowances.push({ ruleId: f.ruleId, file, reason: allowed.get(f.ruleId) });
+      return;
+    }
+    findings.push({ file, heuristic: false, ...f });
+  };
 
   for (const doc of docs) {
     if (!doc || typeof doc !== "object") continue;

@@ -1,5 +1,5 @@
 {
-  "name": "identity-guard-mcp",
+  "name": "@tjwitko/identity-guard-mcp",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -11,5 +11,7 @@
     "zod": "^4.4.3"
   },
   "license": "ISC",
-  "scripts": { "test": "node --test" }
+  "scripts": {
+    "test": "node --test"
+  }
 }

@@ -10,7 +10,7 @@
     "yaml": "^2.4.0",
     "zod": "^4.4.3"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "scripts": {
     "test": "node --test"
   }

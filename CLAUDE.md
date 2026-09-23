@@ -17,7 +17,7 @@ No external binary; `yaml` is the only non-MCP dependency.
 - `rules/kubernetes.mjs` — the positive half; the interesting logic
 - `rules/code.mjs` — the anti-pattern half
 - `rules/taxonomy.mjs` — categories, and the verified annotation/CSI-driver lists
-- `test/rules.test.mjs` — 23 tests
+- `test/rules.test.mjs` — 39 tests
 
 ## Things to know
 

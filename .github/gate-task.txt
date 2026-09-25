@@ -1,0 +1,26 @@
+# The contract this repository is held to, read by agent-gate in .github/workflows/gate.yml.
+#
+# Six checks are gated on what the task asked for. This file exists so the ones that apply here
+# actually run, and it states only what is true of this project: a requirement written to switch a
+# check on would be a fabricated requirement, which is worse than a missing check.
+
+An MCP server that checks whether workloads authenticate with an issued identity rather than with
+credentials they hold.
+
+WHAT IT MUST DO
+- Expose `check_auth_posture` over MCP stdio.
+- Assert that identity wiring is present, not merely that no credential is visible. A file with
+  nothing incriminating in it can still fail.
+- Parse Kubernetes manifests with a real YAML parser, never by matching lines.
+- Report every exemption on every run, so an opt-out is never silent.
+
+HOW WE WILL JUDGE IT
+- Automated tests that someone else can run, covering the tools themselves and not only the rule
+  functions behind them.
+- Errors distinguished from faults: a manifest that is read and found wanting is a result. A
+  manifest that could not be parsed is a different answer, and must not be reported as a pass.
+- A check that cannot run must say so, and never pass.
+
+NOT IN SCOPE
+- No deployment artifacts. This is an MCP server distributed as a package, not a deployed service.
+- No records are stored here, and no credentials are held.

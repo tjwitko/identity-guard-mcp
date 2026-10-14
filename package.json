@@ -1,6 +1,6 @@
 {
   "name": "@tjwitko/identity-guard-mcp",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "type": "module",
   "description": "MCP server exposing check_auth_posture: enforces workload identity (SPIFFE/SVID, IRSA, GKE/Azure workload identity) and refuses password- or static-key-based authentication in source, Kubernetes manifests and Dockerfiles.",

@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import path from "path";
+import { readFileSync } from "fs";
 
 import { resolveScanPath } from "./lib/paths.mjs";
 import { scanProject, REMEDIATION_HEADER, EXCEPTION_FILE } from "./lib/scan.mjs";
@@ -19,7 +20,11 @@ sanitizeEnv(["PATH", "HOME", "SCAN_ROOT"]);
 
 const SCAN_ROOT = path.resolve(process.env.SCAN_ROOT || process.cwd());
 
-const server = new McpServer({ name: "identity-guard", version: "1.0.0" });
+// Read, not written in. This said "1.0.0" while package.json moved on, so an MCP client asking the
+// server what it was got an answer that was releases out of date.
+const { version: VERSION } = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
+
+const server = new McpServer({ name: "identity-guard", version: VERSION });
 
 server.tool(
   "check_auth_posture",

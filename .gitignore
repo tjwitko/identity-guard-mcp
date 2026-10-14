@@ -1,1 +1,5 @@
 node_modules/
+
+# Python bytecode: generated, machine-specific, never source.
+__pycache__/
+*.pyc

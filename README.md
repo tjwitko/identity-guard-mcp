@@ -40,7 +40,7 @@ code and it fell through both scanners.
 ### Install
 
 ```bash
-npm install --save-dev github:tjwitko/identity-guard-mcp#v1.0.2
+npm install --save-dev github:tjwitko/identity-guard-mcp#v1.0.3
 ```
 
 ### Register it with an MCP client

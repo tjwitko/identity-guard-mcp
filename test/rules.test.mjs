@@ -49,6 +49,37 @@ test("flags HTTP Basic authentication", () => {
   assert.deepEqual(ids(scanCode(`headers = {"Authorization": "Basic abc"}`, "a.js")), ["auth.basic"]); // identity-guard:allow test material
 });
 
+// The other places a requests-style credential tuple turns up. Each was matched by the old
+// `auth\s*=\s*\(` and must survive the narrowing.
+test("flags a Basic-auth tuple as a statement, an attribute, or a prefixed keyword", () => {
+  const basic = (src) => ids(scanCode(src, "a.py"));
+  assert.deepEqual(basic(`requests.post(\n    url,\n    auth=(\n        os.environ["U"],\n        os.environ["P"],\n    ),\n)`), ["auth.basic"]); // identity-guard:allow test material
+  assert.deepEqual(basic(`creds = 1\nauth = (USER, PASS)\nrequests.get(u, auth=auth)`), ["auth.basic"]); // identity-guard:allow test material
+  assert.deepEqual(basic(`s = requests.Session()\ns.auth = ("svc", "pw")`), ["auth.basic"]); // identity-guard:allow test material
+  assert.deepEqual(basic(`es = Elasticsearch(h, http_auth=("elastic", pw))`), ["auth.basic"]); // identity-guard:allow test material
+  assert.deepEqual(basic(`es = Elasticsearch(h, basic_auth=((U, P) if U else None))`), ["auth.basic"]); // identity-guard:allow test material
+});
+
+// Found when wolfproof's gate blocked its own agent/authentication-php.mjs: a JS variable named
+// `auth` holding a parenthesised boolean is not a credential tuple, and a high-severity rule that
+// fires on it blocks commits.
+test("does not flag a JS/TS/Kotlin variable named auth", () => {
+  const js = `const auth =\n  (grant && \`an attribute\`) ||\n  (denies && "x");\n`;
+  assert.deepEqual(scanCode(js, "a.mjs"), []);
+  assert.deepEqual(scanCode(js.replace("const ", ""), "a.mjs"), []); // reassignment: still not a tuple
+  for (const src of [
+    `let auth = (a, b);`, // identity-guard:allow test material, must not fire
+    `val auth = (principal as? User)`, // identity-guard:allow test material, must not fire
+    `const auth = (req, res, next) => next();`, // identity-guard:allow test material, must not fire
+    `export const auth = (req, res) => {};`, // identity-guard:allow test material, must not fire
+    `class A { auth = (req: Request, res: Response): void => {} }`, // identity-guard:allow test material, must not fire
+    `this.auth = (a, b) => a;`, // identity-guard:allow test material, must not fire
+    `has_sufficient_auth = (self.project and self.location) or key`, // identity-guard:allow test material, must not fire
+  ]) {
+    assert.deepEqual(scanCode(src, "a.ts"), [], src);
+  }
+});
+
 // `password` appearing in an unrelated structure is not an authentication call, and a scanner
 // that cries wolf on ordinary code is one people switch off.
 test("does not flag a password field far from any connection call", () => {

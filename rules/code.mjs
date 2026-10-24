@@ -41,6 +41,11 @@ function allowedOnLine(source, line) {
 // secret manager. That is not an oversight: the policy is that workloads authenticate with an
 // issued identity, and a password read from Vault is still a password. Sourcing it well changes
 // where it is stored, not what it is.
+//
+// One element of a Python tuple: a string literal, a call with no call nested in its arguments,
+// or anything else up to the next comma or paren.
+const TUPLE_ELEM = String.raw`(?:"[^"\n]*"|'[^'\n]*'|\([^()]*\)|[^()"',])+`;
+
 const RULES = [
   {
     id: "auth.static-cloud-key",
@@ -98,7 +103,22 @@ const RULES = [
     id: "auth.basic",
     category: "auth.basic",
     severity: "high",
-    re: /\b(HTTPBasicAuth|BasicAuth)\b|auth\s*=\s*\(|['"]Authorization['"]\s*:\s*['"]Basic\s/g, // identity-guard:allow the rule's own pattern
+    // The middle alternative is the requests/httpx/elasticsearch tuple: `auth=(user, pass)` as a
+    // keyword argument, or `auth = (...)` / `session.auth = (...)` as a Python statement, also
+    // `http_auth`, `basic_auth`, `proxy_auth`. It was once just `auth\s*=\s*\(`, which blocked
+    // ordinary JS such as `const auth =\n  (a && b) ||\n  (c && d);` — a blocking false positive
+    // found by wolfproof's own gate. Now it needs (1) a keyword-argument or statement position, so
+    // `const/let/var/val auth = (` never qualifies; (2) a comma inside the parens, so a
+    // parenthesised boolean or conditional is not a tuple; (3) no `=>`, so `auth = (req, res) =>`
+    // is not either. Measured on ~45k files of real Python and JS: 69 matches before, 53 after,
+    // nothing new; the 16 dropped were declarations, booleans, conditionals and OAuth objects,
+    // plus one urllib3 `basic_auth=(user + ':' + pw)` string that only matched by accident.
+    re: new RegExp(
+      String.raw`\b(HTTPBasicAuth|BasicAuth)\b|` + // identity-guard:allow the rule's own pattern
+        String.raw`(?<=[(,]\s*|^[ \t]*(?:\w+\.)*)(?:\w+_)?auth\s*=\s*(?!\([^()]*\)\s*(?::[^=\n]*)?=>)\(\s*\(?\s*${TUPLE_ELEM},|` +
+        String.raw`['"]Authorization['"]\s*:\s*['"]Basic\s`,
+      "gm",
+    ),
     message: "an outbound request is using HTTP Basic authentication",
     remediation:
       "authenticate with an mTLS client certificate from the Workload API (an X.509 SVID), or a " +

@@ -84,3 +84,14 @@ No external binary; `yaml` is the only non-MCP dependency.
   configuration.
 - **Not covered:** whether the code actually *uses* the identity it was handed. A pod can mount an
   SVID and still log in with a password. That is a reviewer or integration-test question.
+
+## How changes land
+
+Changes to this repository go through a pull request, not a push to `main`.
+
+- Work on a branch, push it, and open a pull request.
+- Wait for the four required checks (`agent-gate` and the three `tests` jobs) before merging.
+- Do not merge your own pull request unless the user says to; they merge.
+
+One exception: the wolfproof release moves this repository's wolfproof pin with its own script,
+which commits `.github/workflows/gate.yml` and pushes straight to `main`. Leave that as it is.

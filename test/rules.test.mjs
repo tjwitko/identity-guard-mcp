@@ -80,6 +80,38 @@ test("does not flag a JS/TS/Kotlin variable named auth", () => {
   }
 });
 
+// Three cases where the rule fell short of its own comment. A second declarator passed the
+// keyword-argument lookbehind, which accepts any `,`; a call in an arrow function's default
+// parameter defeated the `=>` lookahead, which allowed no parentheses inside the parameter list;
+// and the reassignments below are statement position, which the comment calls "a Python
+// statement" but which matched in any language. All of them are JS, where `(a, b)` is the comma
+// operator and there are no keyword arguments: a credential tuple is Python syntax.
+test("does not flag JS declarators, arrow functions or reassignments as credential tuples", () => {
+  for (const src of [
+    `const a = 1, auth = (b, c);`, // identity-guard:allow test material, must not fire
+    `let x = f(1),\n  auth = (b, c);`, // identity-guard:allow test material, must not fire
+    `this.auth = (a, b = g()) => a;`, // identity-guard:allow test material, must not fire
+    `auth = (log("x"), token);`, // identity-guard:allow test material, must not fire
+    `this.auth = (refresh(), session.token);`, // identity-guard:allow test material, must not fire
+  ]) {
+    assert.deepEqual(scanCode(src, "a.js"), [], src);
+    assert.deepEqual(scanCode(src, "a.ts"), [], src);
+  }
+  // Basic auth in JS is still found where JS spells it.
+  assert.deepEqual(ids(scanCode(`fetch(u, { headers: { "Authorization": "Basic " + b } })`, "a.js")), ["auth.basic"]); // identity-guard:allow test material
+  assert.deepEqual(ids(scanCode(`const a = new BasicAuth(user, pw);`, "a.ts")), ["auth.basic"]); // identity-guard:allow test material
+});
+
+// TUPLE_ELEM allowed one level of parentheses, so a credential read through a nested call -- the
+// ordinary way to read one from the environment -- was a false negative on real Basic auth.
+test("flags a credential tuple whose elements are nested calls", () => {
+  const basic = (src) => ids(scanCode(src, "a.py"));
+  assert.deepEqual(basic(`requests.get(u, auth=(str(os.getenv("U")), p))`), ["auth.basic"]); // identity-guard:allow test material
+  assert.deepEqual(basic(`auth=(str(os.getenv("U")), p)`), ["auth.basic"]); // identity-guard:allow test material
+  assert.deepEqual(basic(`s.auth = (str(os.getenv("U", d())), os.environ["P"])`), ["auth.basic"]); // identity-guard:allow test material
+  assert.deepEqual(basic(`httpx.get(u, auth=(cfg.get("u").strip(), cfg.get("p").strip()))`), ["auth.basic"]); // identity-guard:allow test material
+});
+
 // `password` appearing in an unrelated structure is not an authentication call, and a scanner
 // that cries wolf on ordinary code is one people switch off.
 test("does not flag a password field far from any connection call", () => {

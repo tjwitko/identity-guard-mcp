@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, symlinkSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { parseAllDocuments } from "yaml";
@@ -327,10 +327,23 @@ test("the exception filename is pinned — two sibling repos hardcode it", () =>
   assert.equal(EXCEPTION_FILE, ".identity-exception");
 });
 
-test("refuses to scan outside the scan root", () => {
-  assert.throws(() => resolveScanPath("../../../.aws", "/srv/project"), /refuses to scan outside/);
-  assert.throws(() => resolveScanPath("/srv/project-other/x", "/srv/project"), /refuses to scan outside/);
-  assert.equal(resolveScanPath("k8s", "/srv/project"), "/srv/project/k8s");
+// resolveScanPath bounds the directory the caller names, and is tested over a real tree in
+// test/paths.test.mjs. This is the walk below it: a symlinked file in the project whose real path
+// is outside the scan root is not read. A symlink that stays inside the root is.
+test("the walk does not follow a symlink out of the scan root", () => {
+  const outside = withDir({ "client.py": `requests.get(u, auth=("svc", "key"))` }); // identity-guard:allow test material
+  const dir = withDir({ "app/main.py": `s3 = boto3.client("s3")` });
+  symlinkSync(path.join(outside, "client.py"), path.join(dir, "linked.py"));
+  symlinkSync(path.join(dir, "app", "main.py"), path.join(dir, "inner.py"));
+  try {
+    assert.deepEqual(ids(scanProject(outside).findings), ["auth.basic"], "the planted finding must be detectable");
+    const r = scanProject(resolveScanPath(".", dir));
+    assert.deepEqual(r.findings, []);
+    assert.equal(r.counts.filesScanned, 2, "the in-root link is still read");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
 });
 
 test("unparseable YAML is skipped rather than reported as a violation", () => {

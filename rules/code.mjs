@@ -42,9 +42,21 @@ function allowedOnLine(source, line) {
 // issued identity, and a password read from Vault is still a password. Sourcing it well changes
 // where it is stored, not what it is.
 //
-// One element of a Python tuple: a string literal, a call with no call nested in its arguments,
-// or anything else up to the next comma or paren.
-const TUPLE_ELEM = String.raw`(?:"[^"\n]*"|'[^'\n]*'|\([^()]*\)|[^()"',])+`;
+// One element of a Python tuple: a string literal, a parenthesised group (a call's arguments)
+// nested up to three deep, or anything else up to the next comma or paren. It allowed one level,
+// so `auth=(str(os.getenv("U")), p)` -- a credential read the ordinary way -- was missed.
+const PARENS_1 = String.raw`\([^()]*\)`;
+const PARENS_2 = String.raw`\((?:[^()]|${PARENS_1})*\)`;
+const PARENS_3 = String.raw`\((?:[^()]|${PARENS_2})*\)`;
+const TUPLE_ELEM = String.raw`(?:"[^"\n]*"|'[^'\n]*'|${PARENS_3}|[^()"',])+`;
+
+const BASIC_AUTH = {
+  message: "an outbound request is using HTTP Basic authentication",
+  remediation:
+    "authenticate with an mTLS client certificate from the Workload API (an X.509 SVID), or a " +
+    "JWT-SVID / federated OIDC token, so the caller proves an identity rather than replaying a " +
+    "shared secret.",
+};
 
 const RULES = [
   {
@@ -103,27 +115,44 @@ const RULES = [
     id: "auth.basic",
     category: "auth.basic",
     severity: "high",
-    // The middle alternative is the requests/httpx/elasticsearch tuple: `auth=(user, pass)` as a
-    // keyword argument, or `auth = (...)` / `session.auth = (...)` as a Python statement, also
-    // `http_auth`, `basic_auth`, `proxy_auth`. It was once just `auth\s*=\s*\(`, which blocked
-    // ordinary JS such as `const auth =\n  (a && b) ||\n  (c && d);` — a blocking false positive
-    // found by wolfproof's own gate. Now it needs (1) a keyword-argument or statement position, so
-    // `const/let/var/val auth = (` never qualifies; (2) a comma inside the parens, so a
-    // parenthesised boolean or conditional is not a tuple; (3) no `=>`, so `auth = (req, res) =>`
-    // is not either. Measured on ~45k files of real Python and JS: 69 matches before, 53 after,
-    // nothing new; the 16 dropped were declarations, booleans, conditionals and OAuth objects,
-    // plus one urllib3 `basic_auth=(user + ':' + pw)` string that only matched by accident.
+    // Any language: the requests/httpx/aiohttp auth classes, and a Basic Authorization header.
     re: new RegExp(
       String.raw`\b(HTTPBasicAuth|BasicAuth)\b|` + // identity-guard:allow the rule's own pattern
-        String.raw`(?<=[(,]\s*|^[ \t]*(?:\w+\.)*)(?:\w+_)?auth\s*=\s*(?!\([^()]*\)\s*(?::[^=\n]*)?=>)\(\s*\(?\s*${TUPLE_ELEM},|` +
         String.raw`['"]Authorization['"]\s*:\s*['"]Basic\s`,
       "gm",
     ),
-    message: "an outbound request is using HTTP Basic authentication",
-    remediation:
-      "authenticate with an mTLS client certificate from the Workload API (an X.509 SVID), or a " +
-      "JWT-SVID / federated OIDC token, so the caller proves an identity rather than replaying a " +
-      "shared secret.",
+    ...BASIC_AUTH,
+  },
+  {
+    id: "auth.basic",
+    category: "auth.basic",
+    severity: "high",
+    // The requests/httpx/elasticsearch credential tuple: `auth=(user, pass)` as a keyword argument,
+    // or `auth = (...)` / `session.auth = (...)` as a statement, also `http_auth`, `basic_auth`,
+    // `proxy_auth`. It needs a keyword-argument or statement position and a comma inside the
+    // parentheses, so a parenthesised boolean or conditional is not a tuple.
+    //
+    // Python files only, because a tuple is Python syntax. JavaScript and TypeScript have no
+    // keyword arguments, and there `(a, b)` is the comma operator, so every match outside Python
+    // was a false positive: `const auth =\n  (a && b) || (c && d);` blocked a commit through
+    // wolfproof's own gate, and once that was narrowed, a second declarator
+    // (`const a = 1, auth = (b, c)`), an arrow function with a call in a default parameter
+    // (`this.auth = (a, b = g()) => a`) and a reassignment (`auth = (log("x"), token)`) still
+    // fired. Patching the lookarounds for each JS shape in turn was the wrong fix for a pattern
+    // that only means something in one language. Kotlin's `val auth = (...)` is not a tuple either.
+    //
+    // Measured on ~45k files of real Python and JS when it was first narrowed: 69 matches before,
+    // 53 after, nothing new. Re-run over the same roots on 2026-11-15, which had grown to 47k
+    // files: auth.basic made the same 179 findings before and after this change. This alternative
+    // alone, over those roots plus every repository beside this one (65k files): 73 matches
+    // before, 55 after. All 18 dropped were Python quoted in JS strings in this repository's own
+    // tests; the 55 in Python files were unchanged and nothing was new.
+    files: /\.py$/,
+    re: new RegExp(
+      String.raw`(?<=[(,]\s*|^[ \t]*(?:\w+\.)*)(?:\w+_)?auth\s*=\s*\(\s*\(?\s*${TUPLE_ELEM},`,
+      "gm",
+    ),
+    ...BASIC_AUTH,
   },
 ];
 
@@ -135,6 +164,7 @@ export function scanCode(source, file, allowances = []) {
   const seen = new Set();
 
   for (const rule of RULES) {
+    if (rule.files && !rule.files.test(file)) continue;
     rule.re.lastIndex = 0;
     let m;
     while ((m = rule.re.exec(clean))) {

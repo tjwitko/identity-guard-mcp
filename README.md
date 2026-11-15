@@ -159,7 +159,7 @@ version:
 
 | variable | default | purpose |
 |---|---|---|
-| `SCAN_ROOT` | the process's working directory at startup | bounds every scan; `directory` must resolve inside it |
+| `SCAN_ROOT` | the process's working directory at startup | bounds every scan; `directory` must exist and its real path, after symlinks, must be inside it. A symlinked file whose target is outside it is not read |
 
 Only `PATH`, `HOME` and `SCAN_ROOT` survive startup. Everything else in `process.env` is deleted.
 

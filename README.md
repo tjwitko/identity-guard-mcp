@@ -102,10 +102,15 @@ Returns JSON:
 | `auth.static-cloud-key` | an AWS SDK given `aws_access_key_id` / `accessKeyId` |
 | `auth.password` | a database driver taking a `password` argument |
 | `auth.connection-string-password` | `scheme://user:pass@host` in code — placeholder or not |
-| `auth.basic` | `HTTPBasicAuth`, `auth=(u,p)`, `Authorization: Basic` |
+| `auth.basic` | `HTTPBasicAuth`, `Authorization: Basic`, and in Python files the `auth=(u, p)` tuple |
 | `auth.dockerfile-credential` | `ENV`/`ARG` named `*PASSWORD*`, `*TOKEN*`, `*SECRET*` |
 | `identity.default-sa` | a workload running as the `default` ServiceAccount |
 | `identity.secret-as-auth` | a Secret holding credentials, or injected as env |
+
+The `auth=(u, p)` tuple is read in `.py` files only. It is Python syntax: JavaScript and TypeScript
+have no keyword arguments and `(a, b)` there is the comma operator, so a JS variable or property
+named `auth` — `auth = (log("x"), token)`, `this.auth = (refresh(), session.token)` — is never a
+finding. Basic auth in JS is found by the `Authorization: Basic` header and the `BasicAuth` classes.
 
 **Advisory** — `identity.unbound`: a non-default ServiceAccount with nothing in the manifests
 binding it to an identity.
@@ -159,7 +164,7 @@ version:
 
 | variable | default | purpose |
 |---|---|---|
-| `SCAN_ROOT` | the process's working directory at startup | bounds every scan; `directory` must resolve inside it |
+| `SCAN_ROOT` | the process's working directory at startup | bounds every scan; `directory` must exist and its real path, after symlinks, must be inside it. A symlinked file whose target is outside it is not read |
 
 Only `PATH`, `HOME` and `SCAN_ROOT` survive startup. Everything else in `process.env` is deleted.
 
